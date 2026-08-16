@@ -38,6 +38,32 @@ optional and are named after their equivalents in the other cluster executors.
 | `gpus_per_task` | GPUs per task | unset |
 | `runtime` | walltime limit **in minutes** | unlimited |
 
+Flux requires at least one task per node, so `tasks` must be greater than or
+equal to `nodes`; Snakemake reports an error otherwise. `mem_mb` and `disk_mb`
+are not part of a Flux jobspec and are ignored.
+
+### Serial jobs
+
+A job that requests neither `nodes` nor more than one task is submitted as a
+single task, and its command runs directly:
+
+```python
+rule preprocess:
+    output:
+        "prepared/{case}.h5"
+    threads: 8
+    shell:
+        "prepare --case {wildcards.case} > {output}"
+```
+
+### Parallel jobs
+
+A job that requests `nodes` or several `tasks` is submitted as a *batch* job:
+Flux allocates the requested resources as a nested instance and runs the
+Snakemake job once inside it. The rule's command then launches the parallel
+program into that allocation with `flux run`, in the same way an `sbatch`
+script uses `srun`:
+
 ```python
 rule simulation:
     output:
@@ -49,12 +75,12 @@ rule simulation:
         gpus_per_task=1,
         runtime=30,
     shell:
+        "flux run -n {resources.tasks} -g {resources.gpus_per_task} "
         "solver --case {wildcards.case} > {output}"
 ```
 
-Flux requires at least one task per node, so `tasks` must be greater than or
-equal to `nodes`; Snakemake reports an error otherwise. `mem_mb` and `disk_mb`
-are not part of a Flux jobspec and are ignored.
+Without the `flux run`, the program would run once, on one node, with a single
+rank, regardless of what the job was allocated.
 
 ## Settings
 

@@ -3,7 +3,6 @@
 These do not require flux (or a flux instance) and therefore run anywhere.
 """
 
-from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Optional
 
@@ -14,20 +13,20 @@ from snakemake_executor_plugin_flux import ExecutorSettings, executor as executo
 from snakemake_executor_plugin_flux.executor import FluxExecutor
 
 
-@dataclass
 class FakeJobspec:
     """Stand-in for flux.job.JobspecV1, recording what it was asked for."""
 
-    command: list
-    num_tasks: int
-    cores_per_task: int
-    gpus_per_task: Optional[int]
-    num_nodes: Optional[int]
-    exclusive: bool
+    def __init__(self, kind, **kwargs):
+        self.kind = kind
+        self.__dict__.update(kwargs)
 
     @classmethod
     def from_command(cls, **kwargs):
-        return cls(**kwargs)
+        return cls("command", **kwargs)
+
+    @classmethod
+    def from_batch_command(cls, **kwargs):
+        return cls("batch", **kwargs)
 
 
 @pytest.fixture(autouse=True)
@@ -41,28 +40,41 @@ def make_executor(settings: Optional[ExecutorSettings] = None) -> FluxExecutor:
     executor.logger = SimpleNamespace(debug=lambda *args, **kwargs: None)
     executor.flux_settings = settings if settings is not None else ExecutorSettings()
     executor.format_job_exec = lambda job: "snakemake --some args"
+    executor.run_namespace = "testrun"
     return executor
 
 
 def make_job(threads: int = 1, **resources) -> SimpleNamespace:
-    return SimpleNamespace(name="testjob", threads=threads, resources=resources)
+    return SimpleNamespace(
+        name="testjob", jobid=1, threads=threads, resources=resources
+    )
 
 
-def test_defaults():
+def test_serial_job_is_a_plain_single_task():
     spec = make_executor()._jobspec(make_job(threads=4))
+    assert spec.kind == "command"
     assert spec.num_tasks == 1
     assert spec.cores_per_task == 4  # falls back to the job's threads
     assert spec.gpus_per_task is None
-    assert spec.num_nodes is None
-    assert spec.exclusive is False
     assert spec.command == ["snakemake", "--some", "args"]
 
 
-def test_full_mapping():
+def test_parallel_job_is_a_batch_allocation():
     job = make_job(threads=1, nodes=2, tasks=8, cpus_per_task=6, gpus_per_task=1)
     spec = make_executor()._jobspec(job)
-    assert (spec.num_nodes, spec.num_tasks) == (2, 8)
-    assert (spec.cores_per_task, spec.gpus_per_task) == (6, 1)
+    # a multi-task jobspec would run one Snakemake per task
+    assert spec.kind == "batch"
+    assert (spec.num_nodes, spec.num_slots) == (2, 8)
+    assert (spec.cores_per_slot, spec.gpus_per_slot) == (6, 1)
+    assert spec.script.startswith("#!/bin/sh\n")
+    assert "snakemake --some args" in spec.script
+
+
+def test_multiple_tasks_without_nodes_is_also_a_batch_allocation():
+    spec = make_executor()._jobspec(make_job(tasks=4))
+    assert spec.kind == "batch"
+    assert spec.num_slots == 4
+    assert spec.num_nodes is None
 
 
 def test_cpus_per_task_overrides_threads():

@@ -70,6 +70,14 @@ class FluxExecutor(RemoteExecutor):
         runtime         walltime limit in minutes
 
         flux does not support mem_mb and disk_mb.
+
+        Jobs that request neither nodes nor multiple tasks are submitted as a
+        plain single task. Everything else is submitted as a batch job, i.e. as
+        a nested flux instance that owns the requested allocation and runs the
+        Snakemake job exactly once inside it. The rule's own command is then
+        responsible for launching the parallel program into that allocation
+        (e.g. with 'flux run -n {resources.tasks}'), analogous to using srun
+        within an sbatch script.
         """
         command = self.format_job_exec(job)
         self.logger.debug(command)
@@ -100,11 +108,24 @@ class FluxExecutor(RemoteExecutor):
                 f"job {job.name} does not define a 'nodes' resource."
             )
 
-        return JobspecV1.from_command(
-            command=shlex.split(command),
-            num_tasks=num_tasks,
-            cores_per_task=cores_per_task,
-            gpus_per_task=gpus_per_task,
+        if num_nodes is None and num_tasks == 1:
+            # A plain job: the command is the task.
+            return JobspecV1.from_command(
+                command=shlex.split(command),
+                num_tasks=1,
+                cores_per_task=cores_per_task,
+                gpus_per_task=gpus_per_task,
+            )
+
+        # A parallel job: allocate the requested resources as a nested instance
+        # and run the command once inside it. Submitting this as a multi-task
+        # job instead would launch one copy of Snakemake per task.
+        return JobspecV1.from_batch_command(
+            script=f"#!/bin/sh\n{command}\n",
+            jobname=self._get_jobname(job),
+            num_slots=num_tasks,
+            cores_per_slot=cores_per_task,
+            gpus_per_slot=gpus_per_task,
             num_nodes=num_nodes,
             exclusive=exclusive,
         )
