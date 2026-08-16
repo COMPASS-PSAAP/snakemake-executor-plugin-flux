@@ -5,6 +5,72 @@ Since we already have one for Flux (and it can run in a container) the example
 is for Flux. You can use this repository as a basis to design your own executor to work
 with snakemake!
 
+## Requirements
+
+The Flux Python bindings (`import flux`) are **provided by your flux-core
+installation**, not by this plugin, and cannot be installed from PyPI. They must
+be importable from the very interpreter that runs Snakemake:
+
+```bash
+python -c "import flux, flux.job; print(flux.__file__)"
+```
+
+If Snakemake runs in a self-contained environment (conda, pixi, a venv with an
+interpreter that differs from the system one), this import will typically fail,
+because the bindings are built against the Python that ships with flux-core. In
+that case, run Snakemake from the interpreter that flux-core was built for, or
+make the bindings importable via `PYTHONPATH`.
+
+Snakemake must also be able to reach a Flux instance: either a system instance
+(submitting from a login node) or an enclosing allocation (`flux alloc`), in
+which case jobs are scheduled against the resources of that allocation.
+
+## Resources
+
+Job resources are translated into a Flux jobspec as follows. All of them are
+optional and are named after their equivalents in the other cluster executors.
+
+| Resource | Meaning | Default |
+| --- | --- | --- |
+| `nodes` | number of nodes to allocate | unset (let Flux decide) |
+| `tasks` | number of tasks (e.g. MPI ranks) to launch | 1 |
+| `cpus_per_task` | cores per task | the rule's `threads` |
+| `gpus_per_task` | GPUs per task | unset |
+| `runtime` | walltime limit **in minutes** | unlimited |
+
+```python
+rule simulation:
+    output:
+        "results/{case}.out"
+    resources:
+        nodes=2,
+        tasks=8,
+        cpus_per_task=6,
+        gpus_per_task=1,
+        runtime=30,
+    shell:
+        "solver --case {wildcards.case} > {output}"
+```
+
+Flux requires at least one task per node, so `tasks` must be greater than or
+equal to `nodes`; Snakemake reports an error otherwise. `mem_mb` and `disk_mb`
+are not part of a Flux jobspec and are ignored.
+
+## Settings
+
+| Setting | Description |
+| --- | --- |
+| `--flux-queue` | queue to submit to (e.g. `pbatch`), for instances that define queues |
+| `--flux-bank` | accounting bank to charge the jobs to |
+| `--flux-exclusive` | allocate whole nodes exclusively; requires a `nodes` resource |
+
+```bash
+snakemake --executor flux --jobs 20 --flux-queue pbatch --flux-bank myproject
+```
+
+Neither queue nor bank is usually needed when submitting into an allocation you
+already hold.
+
 ## Usage
 
 ### Tutorial

@@ -5,6 +5,18 @@ Since we already have one for Flux (and it can run in a container) the example
 is for Flux. You can use this repository as a basis to design your own executor to work
 with snakemake!
 
+## Requirements
+
+The Flux Python bindings (`import flux`) come from your flux-core installation, not
+from PyPI, and have to be importable from the interpreter that runs Snakemake. See
+[docs/further.md](docs/further.md) for details.
+
+## Resources and settings
+
+Rules can request `nodes`, `tasks`, `cpus_per_task`, `gpus_per_task` and `runtime`
+(in minutes); the executor accepts `--flux-queue`, `--flux-bank` and
+`--flux-exclusive`. Both are documented in [docs/further.md](docs/further.md).
+
 ## Usage
 
 ### Tutorial

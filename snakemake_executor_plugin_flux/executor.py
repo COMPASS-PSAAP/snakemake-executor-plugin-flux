@@ -18,6 +18,7 @@ try:
     from flux.job import JobspecV1
 except ImportError:
     flux = None
+    JobspecV1 = None
 
 
 class FluxExecutor(RemoteExecutor):
@@ -33,11 +34,16 @@ class FluxExecutor(RemoteExecutor):
         self.envvars = list(self.workflow.envvars) or []
 
         # access executor specific settings
-        # self.workflow.executor_settings
+        self.flux_settings = self.workflow.executor_settings
 
         # Quit early if we can't access the flux api
         if not flux:
-            raise WorkflowError("Cannot import flux. Are Python bindings available?")
+            raise WorkflowError(
+                "Cannot import flux. Are Python bindings available? They are "
+                "provided by your flux-core installation rather than by this "
+                "plugin, so they have to be importable from the interpreter "
+                "that runs Snakemake."
+            )
         self._fexecutor = flux.job.FluxExecutor()
 
     def get_envvar_declarations(self):
@@ -51,29 +57,87 @@ class FluxExecutor(RemoteExecutor):
             for var in self.workflow.remote_execution_settings.envvars or {}
         )
 
+    def _jobspec(self, job: JobExecutorInterface):
+        """Translate the job's resources into a flux jobspec.
+
+        Recognized resources (all optional, and named after their equivalents
+        in the other cluster executors):
+
+        nodes           number of nodes to allocate
+        tasks           number of tasks (e.g. MPI ranks) to launch
+        cpus_per_task   cores per task, defaults to the job's threads
+        gpus_per_task   GPUs per task
+        runtime         walltime limit in minutes
+
+        flux does not support mem_mb and disk_mb.
+        """
+        command = self.format_job_exec(job)
+        self.logger.debug(command)
+
+        resources = job.resources
+
+        # Must have at least one task and one core per task, and integer values
+        num_tasks = max(1, int(resources.get("tasks") or 1))
+        cores_per_task = max(1, int(resources.get("cpus_per_task") or job.threads))
+
+        num_nodes = resources.get("nodes")
+        num_nodes = int(num_nodes) if num_nodes else None
+
+        gpus_per_task = resources.get("gpus_per_task")
+        gpus_per_task = int(gpus_per_task) if gpus_per_task else None
+
+        exclusive = bool(self.flux_settings.exclusive)
+
+        if num_nodes is not None and num_tasks < num_nodes:
+            raise WorkflowError(
+                f"Job {job.name} requests {num_nodes} nodes but only "
+                f"{num_tasks} tasks. Flux requires at least one task per node, "
+                "please increase the 'tasks' resource."
+            )
+        if exclusive and num_nodes is None:
+            raise WorkflowError(
+                "Exclusive node allocation was requested (--flux-exclusive), but "
+                f"job {job.name} does not define a 'nodes' resource."
+            )
+
+        return JobspecV1.from_command(
+            command=shlex.split(command),
+            num_tasks=num_tasks,
+            cores_per_task=cores_per_task,
+            gpus_per_task=gpus_per_task,
+            num_nodes=num_nodes,
+            exclusive=exclusive,
+        )
+
+    @staticmethod
+    def _duration(resources) -> float:
+        """Snakemake's runtime resource is in minutes, flux durations in seconds.
+
+        A duration of zero (the default) means unlimited.
+        """
+        runtime = resources.get("runtime")
+        return float(runtime) * 60 if runtime else 0
+
     def run_job(self, job: JobExecutorInterface):
         flux_logfile = job.logfile_suggestion(os.path.join(".snakemake", "flux_logs"))
         os.makedirs(os.path.dirname(flux_logfile), exist_ok=True)
 
-        # The entire snakemake command to run, etc
-        command = self.format_job_exec(job)
-        self.logger.debug(command)
-
         # Generate the flux job
-        # flux does not support mem_mb, disk_mb
-        fluxjob = JobspecV1.from_command(command=shlex.split(command))
+        fluxjob = self._jobspec(job)
 
-        # A duration of zero (the default) means unlimited
-        fluxjob.duration = job.resources.get("runtime", 0)
+        fluxjob.duration = self._duration(job.resources)
+
         fluxjob.stderr = flux_logfile
 
         # Ensure the cwd is the snakemake working directory
         fluxjob.cwd = self.workdir
         fluxjob.environment = dict(os.environ)
 
-        # Resources, must have at least one CPU, and integer value
-        cpus_per_task = max(1, int(job.resources.get("cpus_per_task") or job.threads))
-        fluxjob.cpus_per_task = cpus_per_task
+        if self.flux_settings.queue:
+            fluxjob.queue = self.flux_settings.queue
+        if self.flux_settings.bank:
+            fluxjob.setattr("attributes.system.bank", self.flux_settings.bank)
+
         flux_future = self._fexecutor.submit(fluxjob)
 
         # Save aux metadata
@@ -132,6 +196,9 @@ class FluxExecutor(RemoteExecutor):
         cancel all active jobs. This method is called when snakemake is interrupted.
         """
         for job in active_jobs:
-            if not job.flux_future.done():
-                flux.job.cancel(self.f, job.jobid)
+            flux_future = job.aux["flux_future"]
+            if not flux_future.done():
+                # cancel() covers both jobs that are still pending in the
+                # executor and jobs that are already running.
+                flux_future.cancel()
         self.shutdown()
