@@ -148,6 +148,10 @@ class FluxExecutor(RemoteExecutor):
 
         fluxjob.duration = self._duration(job.resources)
 
+        # Capture both streams. Without stdout the job's output only lives in
+        # the KVS and is lost once the job is purged, which makes failures very
+        # hard to debug.
+        fluxjob.stdout = flux_logfile
         fluxjob.stderr = flux_logfile
 
         # Ensure the cwd is the snakemake working directory
