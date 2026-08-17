@@ -208,6 +208,16 @@ class FluxExecutor(RemoteExecutor):
             else:
                 yield j
 
+    def shutdown(self):
+        """Stop the flux executor's worker threads, then shut down normally.
+
+        Without this, those threads keep polling after the workflow is done.
+        They are only joined by a finalizer at interpreter exit, which leaves
+        Snakemake hanging once everything else has completed.
+        """
+        self._fexecutor.shutdown(wait=False)
+        super().shutdown()
+
     def cancel_jobs(self, active_jobs: List[SubmittedJobInfo]):
         """
         cancel all active jobs. This method is called when snakemake is interrupted.
