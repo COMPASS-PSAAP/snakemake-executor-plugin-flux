@@ -40,14 +40,17 @@ def make_executor(settings: Optional[ExecutorSettings] = None) -> FluxExecutor:
     executor.logger = SimpleNamespace(debug=lambda *args, **kwargs: None)
     executor.flux_settings = settings if settings is not None else ExecutorSettings()
     executor.format_job_exec = lambda job: "snakemake --some args"
-    executor.run_namespace = "testrun"
+    # set by RemoteExecutor.__init__ from --jobname, consumed by get_jobname()
+    executor.jobname = "snakejob.{name}.{jobid}"
     return executor
 
 
 def make_job(threads: int = 1, **resources) -> SimpleNamespace:
-    return SimpleNamespace(
-        name="testjob", jobid=1, threads=threads, resources=resources
+    job = SimpleNamespace(name="testjob", jobid=1, threads=threads, resources=resources)
+    job.format_wildcards = lambda string, **variables: string.format(
+        name=job.name, jobid=job.jobid, **variables
     )
+    return job
 
 
 def test_serial_job_is_a_plain_single_task():
@@ -68,6 +71,8 @@ def test_parallel_job_is_a_batch_allocation():
     assert (spec.cores_per_slot, spec.gpus_per_slot) == (6, 1)
     assert spec.script.startswith("#!/bin/sh\n")
     assert "snakemake --some args" in spec.script
+    # the name comes from the interface's get_jobname(), i.e. from --jobname
+    assert spec.jobname == "snakejob.testjob.1"
 
 
 def test_multiple_tasks_without_nodes_is_also_a_batch_allocation():

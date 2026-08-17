@@ -122,7 +122,7 @@ class FluxExecutor(RemoteExecutor):
         # job instead would launch one copy of Snakemake per task.
         return JobspecV1.from_batch_command(
             script=f"#!/bin/sh\n{command}\n",
-            jobname=self._get_jobname(job),
+            jobname=self.get_jobname(job),
             num_slots=num_tasks,
             cores_per_slot=cores_per_task,
             gpus_per_slot=gpus_per_task,
@@ -171,10 +171,6 @@ class FluxExecutor(RemoteExecutor):
     def get_snakefile(self):
         assert os.path.exists(self.workflow.main_snakefile)
         return self.workflow.main_snakefile
-
-    def _get_jobname(self, job):
-        # Use a dummy job name (human readable and also namespaced)
-        return "snakejob-%s-%s-%s" % (self.run_namespace, job.name, job.jobid)
 
     async def check_active_jobs(
         self, active_jobs: List[SubmittedJobInfo]
