@@ -29,3 +29,12 @@ snakemake = "^8.20.1"
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["win-64"]
+
+[tool.pixi.pypi-dependencies]
+snakemake-executor-plugin-flux = { path = ".", editable = true }
+
+[tool.pixi.tasks]

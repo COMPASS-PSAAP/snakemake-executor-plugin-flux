@@ -7,3 +7,6 @@ build/
 .pytest_cache/
 .snakemake/
 poetry.lock
+# pixi environments
+.pixi/*
+!.pixi/config.toml
